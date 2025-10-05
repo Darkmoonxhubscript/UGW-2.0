@@ -1,0 +1,497 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local BULLET_SPEED = 1200
+local PREDICTION_SAMPLES = 15
+local PLAYER_WALKSPEED = 16
+local JUMP_POWER = 50
+local GRAVITY = 196.2
+
+local STRAFE_DETECTION_THRESHOLD = 0.3
+local STRAFE_PREDICTION_MULTIPLIER = 1.4
+local VERTICAL_PREDICTION_MULTIPLIER = 0.85
+local ADAPTIVE_LEAD_FACTOR = 1.15
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ShootButtonGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local shootButton = Instance.new("TextButton")
+shootButton.Name = "ShootButton"
+shootButton.Size = UDim2.new(0, 120, 0, 120)
+shootButton.Position = UDim2.new(0.85, 0, 0.7, 0)
+shootButton.AnchorPoint = Vector2.new(0.5, 0.5)
+shootButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+shootButton.BorderSizePixel = 0
+shootButton.Font = Enum.Font.GothamBold
+shootButton.Text = "Shoot"
+shootButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+shootButton.TextSize = 28
+shootButton.TextWrapped = true
+shootButton.AutoButtonColor = false
+shootButton.Parent = screenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0.2, 0)
+uiCorner.Parent = shootButton
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Color = Color3.fromRGB(150, 30, 30)
+uiStroke.Thickness = 4
+uiStroke.Parent = shootButton
+
+local uiGradient = Instance.new("UIGradient")
+uiGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 70)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 40, 40))
+}
+uiGradient.Rotation = 45
+uiGradient.Parent = shootButton
+
+local speedFrame = Instance.new("Frame")
+speedFrame.Name = "SpeedFrame"
+speedFrame.Size = UDim2.new(0, 180, 0, 70)
+speedFrame.Position = UDim2.new(0.05, 0, 0.05, 0)
+speedFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+speedFrame.BorderSizePixel = 0
+speedFrame.Parent = screenGui
+
+local speedCorner = Instance.new("UICorner")
+speedCorner.CornerRadius = UDim.new(0.15, 0)
+speedCorner.Parent = speedFrame
+
+local speedStroke = Instance.new("UIStroke")
+speedStroke.Color = Color3.fromRGB(80, 80, 80)
+speedStroke.Thickness = 2
+speedStroke.Parent = speedFrame
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Name = "SpeedLabel"
+speedLabel.Size = UDim2.new(1, -10, 0, 25)
+speedLabel.Position = UDim2.new(0, 5, 0, 5)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.Text = "Bullet Speed"
+speedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedLabel.TextSize = 14
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = speedFrame
+
+local speedInput = Instance.new("TextBox")
+speedInput.Name = "SpeedInput"
+speedInput.Size = UDim2.new(1, -10, 0, 30)
+speedInput.Position = UDim2.new(0, 5, 0, 35)
+speedInput.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+speedInput.BorderSizePixel = 0
+speedInput.Font = Enum.Font.Gotham
+speedInput.Text = tostring(BULLET_SPEED)
+speedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedInput.TextSize = 16
+speedInput.PlaceholderText = "1200"
+speedInput.ClearTextOnFocus = false
+speedInput.Parent = speedFrame
+
+local speedInputCorner = Instance.new("UICorner")
+speedInputCorner.CornerRadius = UDim.new(0.2, 0)
+speedInputCorner.Parent = speedInput
+
+speedInput.FocusLost:Connect(function(enterPressed)
+    local newSpeed = tonumber(speedInput.Text)
+    if newSpeed and newSpeed > 0 and newSpeed <= 10000 then
+        BULLET_SPEED = newSpeed
+    else
+        speedInput.Text = tostring(BULLET_SPEED)
+    end
+end)
+
+local dragging = false
+local dragInput, dragStart, startPos
+
+local function updateInput(input)
+    local delta = input.Position - dragStart
+    shootButton.Position = UDim2.new(
+        startPos.X.Scale,
+        startPos.X.Offset + delta.X,
+        startPos.Y.Scale,
+        startPos.Y.Offset + delta.Y
+    )
+end
+
+shootButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = shootButton.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+shootButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        updateInput(input)
+    end
+end)
+
+local speedDragging = false
+local speedDragInput, speedDragStart, speedStartPos
+
+local function updateSpeedFrameInput(input)
+    local delta = input.Position - speedDragStart
+    speedFrame.Position = UDim2.new(
+        speedStartPos.X.Scale,
+        speedStartPos.X.Offset + delta.X,
+        speedStartPos.Y.Scale,
+        speedStartPos.Y.Offset + delta.Y
+    )
+end
+
+speedFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        speedDragging = true
+        speedDragStart = input.Position
+        speedStartPos = speedFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                speedDragging = false
+            end
+        end)
+    end
+end)
+
+speedFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
+        speedDragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == speedDragInput and speedDragging then
+        updateSpeedFrameInput(input)
+    end
+end)
+
+local velocityTracking = {}
+
+local function trackVelocity(character)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    if not velocityTracking[character] then
+        velocityTracking[character] = {
+            positions = {},
+            velocities = {},
+            times = {},
+            strafePattern = {},
+            jumpTimes = {},
+            lastDirection = Vector3.new(0, 0, 0),
+            strafeChanges = 0,
+            lastUpdate = tick()
+        }
+    end
+    
+    local data = velocityTracking[character]
+    local currentTime = tick()
+    local currentPos = hrp.Position
+    
+    table.insert(data.positions, currentPos)
+    table.insert(data.times, currentTime)
+    
+    if #data.positions >= 2 then
+        local lastPos = data.positions[#data.positions - 1]
+        local deltaTime = currentTime - data.times[#data.times - 1]
+        
+        if deltaTime > 0 then
+            local velocity = (currentPos - lastPos) / deltaTime
+            table.insert(data.velocities, velocity)
+            
+            if #data.velocities >= 2 then
+                local currentDir = velocity.Unit
+                local lastDir = data.velocities[#data.velocities - 1].Unit
+                
+                if currentDir:Dot(lastDir) < (1 - STRAFE_DETECTION_THRESHOLD) then
+                    data.strafeChanges = data.strafeChanges + 1
+                    table.insert(data.strafePattern, {
+                        time = currentTime,
+                        direction = currentDir
+                    })
+                end
+                
+                data.lastDirection = currentDir
+            end
+        end
+    end
+    
+    if #data.positions >= 2 then
+        local lastPos = data.positions[#data.positions - 1]
+        local yDelta = currentPos.Y - lastPos.Y
+        
+        if yDelta > 3 then
+            table.insert(data.jumpTimes, currentTime)
+        end
+    end
+    
+    if #data.positions > PREDICTION_SAMPLES then
+        table.remove(data.positions, 1)
+        table.remove(data.times, 1)
+    end
+    
+    if #data.velocities > PREDICTION_SAMPLES then
+        table.remove(data.velocities, 1)
+    end
+    
+    if #data.strafePattern > 5 then
+        table.remove(data.strafePattern, 1)
+    end
+    
+    if #data.jumpTimes > 3 then
+        table.remove(data.jumpTimes, 1)
+    end
+end
+
+local function getSmartVelocity(character)
+    local data = velocityTracking[character]
+    if not data or #data.velocities < 2 then
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        return hrp and hrp.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
+    end
+    
+    local totalVelocity = Vector3.new(0, 0, 0)
+    local totalWeight = 0
+    local n = #data.velocities
+    
+    for i = 1, n do
+        local weight = i / n
+        totalVelocity = totalVelocity + (data.velocities[i] * weight)
+        totalWeight = totalWeight + weight
+    end
+    
+    return totalVelocity / totalWeight
+end
+
+local function isStrafeMovement(character)
+    local data = velocityTracking[character]
+    if not data then return false, 0 end
+    
+    local currentTime = tick()
+    local recentChanges = 0
+    
+    for _, pattern in ipairs(data.strafePattern) do
+        if currentTime - pattern.time < 2 then
+            recentChanges = recentChanges + 1
+        end
+    end
+    
+    return recentChanges >= 2, recentChanges
+end
+
+local function isJumpingFrequently(character)
+    local data = velocityTracking[character]
+    if not data or #data.jumpTimes < 2 then return false end
+    
+    local currentTime = tick()
+    local recentJumps = 0
+    
+    for _, jumpTime in ipairs(data.jumpTimes) do
+        if currentTime - jumpTime < 3 then
+            recentJumps = recentJumps + 1
+        end
+    end
+    
+    return recentJumps >= 2
+end
+
+local function predictPosition(targetCharacter, myPosition)
+    local hrp = targetCharacter:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local targetPos = hrp.Position
+    local distance = (targetPos - myPosition).Magnitude
+    local timeToHit = distance / BULLET_SPEED
+    
+    local velocity = getSmartVelocity(targetCharacter)
+    local humanoid = targetCharacter:FindFirstChild("Humanoid")
+    
+    local isStrafing, strafeIntensity = isStrafeMovement(targetCharacter)
+    local isJumping = isJumpingFrequently(targetCharacter)
+    
+    local predictedPos = targetPos + (velocity * timeToHit)
+    
+    if humanoid and humanoid.MoveDirection.Magnitude > 0.1 then
+        local moveDir = humanoid.MoveDirection
+        local walkSpeed = PLAYER_WALKSPEED
+        
+        local strafeFactor = isStrafing and STRAFE_PREDICTION_MULTIPLIER or 1.0
+        local erraticFactor = strafeIntensity > 3 and ADAPTIVE_LEAD_FACTOR or 1.0
+        
+        predictedPos = predictedPos + (moveDir * walkSpeed * timeToHit * strafeFactor * erraticFactor)
+    end
+    
+    if isJumping then
+        local data = velocityTracking[targetCharacter]
+        if data and #data.velocities > 0 then
+            local lastVel = data.velocities[#data.velocities]
+            
+            if lastVel.Y > 0 then
+                local jumpTime = math.min(timeToHit, 0.5)
+                local verticalDisplacement = (lastVel.Y * jumpTime) - (0.5 * GRAVITY * jumpTime * jumpTime)
+                predictedPos = predictedPos + Vector3.new(0, verticalDisplacement * VERTICAL_PREDICTION_MULTIPLIER, 0)
+            end
+        end
+    end
+    
+    for i = 1, 3 do
+        local newDistance = (predictedPos - myPosition).Magnitude
+        local newTimeToHit = newDistance / BULLET_SPEED
+        
+        predictedPos = targetPos + (velocity * newTimeToHit)
+        
+        if humanoid and humanoid.MoveDirection.Magnitude > 0.1 then
+            local moveDir = humanoid.MoveDirection
+            local walkSpeed = PLAYER_WALKSPEED
+            local strafeFactor = isStrafing and STRAFE_PREDICTION_MULTIPLIER or 1.0
+            local erraticFactor = strafeIntensity > 3 and ADAPTIVE_LEAD_FACTOR or 1.0
+            
+            predictedPos = predictedPos + (moveDir * walkSpeed * newTimeToHit * strafeFactor * erraticFactor)
+        end
+    end
+    
+    predictedPos = predictedPos + Vector3.new(0, 1.8, 0)
+    
+    return predictedPos
+end
+
+local function hasLineOfSight(fromPos, toPos, ignoreCharacter)
+    local direction = (toPos - fromPos)
+    local distance = direction.Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {player.Character, ignoreCharacter}
+    raycastParams.IgnoreWater = true
+    
+    local raycastResult = workspace:Raycast(fromPos, direction, raycastParams)
+    
+    if raycastResult then
+        return false
+    end
+    
+    return true
+end
+
+local function findNearestEnemy()
+    local myCharacter = player.Character
+    if not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
+        return nil
+    end
+    
+    local myTeam = player.Team
+    local myPos = myCharacter.HumanoidRootPart.Position
+    local validEnemies = {}
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player then
+            local otherTeam = otherPlayer.Team
+            
+            if otherTeam and (otherTeam.Name == "Blue" or otherTeam.Name == "Red") and otherTeam ~= myTeam then
+                local otherCharacter = otherPlayer.Character
+                
+                if otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart") then
+                    local otherHumanoid = otherCharacter:FindFirstChild("Humanoid")
+                    
+                    if otherHumanoid and otherHumanoid.Health > 0 then
+                        local otherPos = otherCharacter.HumanoidRootPart.Position
+                        local distance = (myPos - otherPos).Magnitude
+                        
+                        if hasLineOfSight(myPos, otherPos, otherCharacter) then
+                            table.insert(validEnemies, {
+                                character = otherCharacter,
+                                distance = distance
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    if #validEnemies == 0 then
+        return nil
+    end
+    
+    table.sort(validEnemies, function(a, b)
+        return a.distance < b.distance
+    end)
+    
+    return validEnemies[1].character, validEnemies[1].distance
+end
+
+RunService.Heartbeat:Connect(function()
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            trackVelocity(otherPlayer.Character)
+        end
+    end
+end)
+
+local function buttonClickEffect()
+    local originalSize = shootButton.Size
+    shootButton.Size = UDim2.new(0, 110, 0, 110)
+    shootButton.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+    
+    task.wait(0.1)
+    
+    shootButton.Size = originalSize
+    shootButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+end
+
+shootButton.MouseButton1Click:Connect(function()
+    if dragging then return end
+    
+    buttonClickEffect()
+    
+    local myCharacter = player.Character
+    if not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    
+    local myPos = myCharacter.HumanoidRootPart.Position
+    local nearestEnemy, distance = findNearestEnemy()
+    
+    if nearestEnemy then
+        local predictedPos = predictPosition(nearestEnemy, myPos)
+        
+        if predictedPos then
+            local args = {
+                [1] = predictedPos,
+                [2] = "Sniper"
+            }
+            
+            ReplicatedStorage.Events.Remote.ShotTarget:FireServer(unpack(args))
+        end
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(removedPlayer)
+    if removedPlayer.Character then
+        velocityTracking[removedPlayer.Character] = nil
+    end
+end)
